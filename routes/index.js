@@ -1,0 +1,33 @@
+import express from "express";
+import packageRouter from "./package.js";
+import authRouter from "./auth.js";
+import userRouter from "./user.js";
+import clientRouter from "./client.js";
+import cuponRouter from "./cupon.js";
+import subscriptionRouter from "./subscription.js";
+import exerciseRouter from "./exercise.js";
+import workoutPlanRouter from "./workoutPlan.js";
+import dietPlanRouter from "./dietPlan.js";
+import chatbotRouter from "./chatbot.js";
+import progressRouter from "./progressEntry.js";
+import workoutLogRouter from "./workoutLog.js";
+import notificationRouter from "./notifications.js";
+import chatRouter from "./chat.js";
+// Routes
+const router = express.Router();
+router.use("/api/v1/package", packageRouter);
+router.use("/api/v1/auth", authRouter);
+router.use("/api/v1/user", userRouter);
+router.use("/api/v1/clients", clientRouter);
+router.use("/api/v1/cupons", cuponRouter);
+router.use("/api/v1/subscriptions", subscriptionRouter);
+router.use('/api/v1/exercises', exerciseRouter);
+router.use('/api/v1/workout-plans', workoutPlanRouter);
+router.use('/api/v1/diet-plans', dietPlanRouter);
+router.use('/api/v1/chatbot', chatbotRouter);
+router.use('/api/v1/progress', progressRouter);
+router.use('/api/v1/workout-logs', workoutLogRouter);
+router.use('/api/v1/notifications', notificationRouter);
+router.use('/api/v1/chat', chatRouter);
+
+export default router;
