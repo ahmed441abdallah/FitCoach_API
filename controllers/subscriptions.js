@@ -3,15 +3,16 @@ import Package from "../models/Package.js";
 import Cupon from "../models/Cupon.js";
 import Subscription from "../models/Subscription.js";
 import Client from "../models/Client.js";
+import User from "../models/User.js";
 import { sendTelegramAlert } from "../utils/telegram.js";
 import { sendEmail } from "../utils/sendEmail.js";
 import PDFDocument from "pdfkit";
+import { notifyUser } from "../utils/notifyUser.js";
 
 // @desc    calculate subscription
 // @route   POST /api/v1/subscriptions/calculate
 // @access  Private
 export const calculateSubscription = asyncHandler(async (req, res) => {
-    // تصليح الـ Typos في أسماء المتغيرات
     const { packageId, couponCode, pricingOptionId } = req.body;
 
     // 1. find package
@@ -224,38 +225,59 @@ export const getMySubscription = asyncHandler(async (req, res) => {
 // route PUT /api/v1/subscriptions/:id/approve
 // access private
 export const approveSubscription = asyncHandler(async (req, res) => {
-    const subscription = await Subscription.findById(req.params.id)
-        .populate('client', 'userName email')
-        .populate('package', 'name');
-    if (!subscription) {
-        return res.status(404).json({
-            success: false,
-            message: "Subscription not found"
-        });
+    console.log('[approveSubscription] START id=', req.params.id);
+    let subscription;
+    try {
+        subscription = await Subscription.findById(req.params.id);
+    } catch (e) {
+        console.error('[approveSubscription] findById failed:', e.message);
+        throw e;
     }
-    const updated = await Subscription.findByIdAndUpdate(
-        req.params.id,
-        { status: "active", paymentStatus: "paid" },
-        { new: true, runValidators: false }
-    ).populate('client', 'userName email').populate('package', 'name');
+    if (!subscription) {
+        return res.status(404).json({ success: false, message: "Subscription not found" });
+    }
+    console.log('[approveSubscription] Found sub, status=', subscription.status);
 
-    sendEmail({
-        to: updated.client.email,
-        subject: '\u2705 Your Subscription is Approved!',
-        data: {
-            name: updated.client.userName,
-            package: updated.package.name,
-            endDate: updated.endDate
-        }
-    }).catch(err => console.error("Email error (approve):", err.message));
-    await notifyUser({
-        userId: updated.client._id,
-        title: "Your Subscription is Approved!",
-        message: `Your subscription to ${updated.package.name} has been approved.`,
-        type: "subscription",
-        link: `/subscriptions/${updated._id}`
-    });
+    let updated;
+    try {
+        updated = await Subscription.findByIdAndUpdate(
+            req.params.id,
+            { status: "active", paymentStatus: "paid" },
+            { new: true, runValidators: false }
+        ).populate('client', 'userName email').populate('package', 'name');
+    } catch (e) {
+        console.error('[approveSubscription] findByIdAndUpdate failed:', e.message);
+        throw e;
+    }
 
+    if (!updated) {
+        return res.status(404).json({ success: false, message: "Subscription not found after update" });
+    }
+    console.log('[approveSubscription] Updated ok, new status=', updated.status);
+
+    // Fire-and-forget side-effects — their failure must never affect the HTTP response
+    if (updated.client && updated.package) {
+        Promise.allSettled([
+            sendEmail({
+                to: updated.client.email,
+                subject: '\u2705 Your Subscription is Approved!',
+                data: {
+                    name: updated.client.userName,
+                    package: updated.package.name,
+                    endDate: updated.endDate
+                }
+            }).catch(error => console.error("Email failed:", error?.message)),
+            notifyUser({
+                userId: updated.client._id,
+                title: "Your Subscription is Approved!",
+                message: `Your subscription to ${updated.package.name} has been approved.`,
+                type: "subscription",
+                link: `/subscriptions/${updated._id}`
+            }).catch(error => console.error("Notify failed:", error?.message))
+        ]).catch(err => console.error("Side-effect batch failed:", err?.message));
+    }
+
+    console.log('[approveSubscription] Sending 200 response');
     res.status(200).json({
         success: true,
         data: updated
@@ -265,37 +287,61 @@ export const approveSubscription = asyncHandler(async (req, res) => {
 // route PUT /api/v1/subscriptions/:id/reject
 // access private
 export const rejectSubscription = asyncHandler(async (req, res) => {
-    const subscription = await Subscription.findById(req.params.id)
-        .populate('client', 'userName email')
-        .populate('package', 'name');
-    if (!subscription) {
-        return res.status(404).json({
-            success: false,
-            message: "Subscription not found"
-        });
+    console.log('[rejectSubscription] START id=', req.params.id);
+    let subscription;
+    try {
+        subscription = await Subscription.findById(req.params.id);
+    } catch (e) {
+        console.error('[rejectSubscription] findById failed:', e.message);
+        throw e;
     }
-    const updated = await Subscription.findByIdAndUpdate(
-        req.params.id,
-        { status: "cancelled", paymentStatus: "failed" },
-        { new: true, runValidators: false }
-    ).populate('client', 'userName email').populate('package', 'name');
+    if (!subscription) {
+        return res.status(404).json({ success: false, message: "Subscription not found" });
+    }
+    console.log('[rejectSubscription] Found sub, status=', subscription.status, 'paymentStatus=', subscription.paymentStatus);
 
-    sendEmail({
-        to: updated.client.email,
-        subject: 'Your Subscription has been Rejected',
-        data: {
-            name: updated.client.userName,
-            package: updated.package.name,
-        }
-    }).catch(err => console.error("Email error (reject):", err.message));
-    await notifyUser({
-        userId: updated.client._id,
-        title: "Your Subscription has been Rejected",
-        message: `Your subscription to ${updated.package.name} has been rejected.`,
-        type: "subscription",
-        link: `/subscriptions/${updated._id}`
-    });
+    // Preserve paymentStatus if already paid (active sub revocation); only set failed for pending rejections
+    const paymentStatusUpdate = subscription.paymentStatus === 'paid' ? 'paid' : 'failed';
 
+    let updated;
+    try {
+        updated = await Subscription.findByIdAndUpdate(
+            req.params.id,
+            { status: "cancelled", paymentStatus: paymentStatusUpdate },
+            { new: true, runValidators: false }
+        ).populate('client', 'userName email').populate('package', 'name');
+    } catch (e) {
+        console.error('[rejectSubscription] findByIdAndUpdate failed:', e.message);
+        throw e;
+    }
+
+    if (!updated) {
+        return res.status(404).json({ success: false, message: "Subscription not found after update" });
+    }
+    console.log('[rejectSubscription] Updated ok, new status=', updated.status);
+
+    // Fire-and-forget side-effects — their failure must never affect the HTTP response
+    if (updated.client && updated.package) {
+        Promise.allSettled([
+            sendEmail({
+                to: updated.client.email,
+                subject: 'Your Subscription has been Rejected',
+                data: {
+                    name: updated.client.userName,
+                    package: updated.package.name,
+                }
+            }).catch(error => console.error("Email failed:", error?.message)),
+            notifyUser({
+                userId: updated.client._id,
+                title: "Your Subscription has been Rejected",
+                message: `Your subscription to ${updated.package.name} has been rejected.`,
+                type: "subscription",
+                link: `/subscriptions/${updated._id}`
+            }).catch(error => console.error("Notify failed:", error?.message))
+        ]).catch(err => console.error("Side-effect batch failed:", err?.message));
+    }
+
+    console.log('[rejectSubscription] Sending 200 response');
     res.status(200).json({
         success: true,
         data: updated

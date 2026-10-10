@@ -36,10 +36,24 @@ app.use(hpp());
 // ── Create HTTP server from Express app ──
 const server = http.createServer(app);
 
+// ── Allowed Origins for CORS ──
+const allowedOrigins = ["http://localhost:3000"];
+if (process.env.FRONTEND_URL) {
+    allowedOrigins.push(process.env.FRONTEND_URL);
+}
+
 // ── Attach Socket.IO to the HTTP server ──
 const io = new Server(server, {
     cors: {
-        origin: "http://localhost:3000",
+        origin: function (origin, callback) {
+            // Allow requests with no origin (like mobile apps or curl requests)
+            // Or if origin is in the allowed list, or if it's a vercel deployment
+            if (!origin || allowedOrigins.includes(origin) || origin.includes('vercel.app')) {
+                callback(null, true);
+            } else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
         methods: ["GET", "POST"],
         credentials: true
     }
@@ -48,7 +62,13 @@ const io = new Server(server, {
 app.use(express.json());
 app.use(cookieParser());
 app.use(cors({
-    origin: "http://localhost:3000",
+    origin: function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin) || origin.includes('vercel.app')) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true
 }));
 
