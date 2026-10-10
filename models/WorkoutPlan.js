@@ -45,7 +45,7 @@ const workoutPlanSchema = new mongoose.Schema({
                 min: 0
             },
 
-            _id: false // ✅ منع ObjectId auto
+
         }]
     }],
 
@@ -55,7 +55,7 @@ const workoutPlanSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-workoutPlanSchema.index({ client: 1, isActive: 1 });
+workoutPlanSchema.index({ client: 1 });
 const WorkoutPlan = mongoose.model("WorkoutPlan", workoutPlanSchema);
 export default WorkoutPlan;
 

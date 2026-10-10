@@ -26,7 +26,13 @@ export const createWorkoutPlan = asyncHandler(async (req, res) => {
 // access private
 
 export const getAllWorkoutPlans = asyncHandler(async (req, res) => {
-    const workoutPlans = await WorkoutPlan.find().populate("client", "userName email");
+    const workoutPlans = await WorkoutPlan.find()
+        .populate("client", "userName email")
+        .populate({
+            path: "days.exercises.exerciseId",
+            select: "name bodyPart"
+        });
+    console.log("DEBUG: ", JSON.stringify(workoutPlans[0]?.days[0]?.exercises, null, 2));
     res.status(200).json({ success: true, data: workoutPlans });
 })
 
@@ -34,7 +40,12 @@ export const getAllWorkoutPlans = asyncHandler(async (req, res) => {
 // route GET /api/v1/workout-plans/:id
 // access private
 export const getWorkoutPlanById = asyncHandler(async (req, res) => {
-    const workoutPlan = await WorkoutPlan.findById(req.params.id).populate("client", "userName email");
+    const workoutPlan = await WorkoutPlan.findById(req.params.id)
+        .populate("client", "userName email")
+        .populate({
+            path: "days.exercises.exerciseId",
+            select: "name bodyPart"
+        });
     res.status(200).json({ success: true, data: workoutPlan });
 })
 // desc update workout plan
@@ -42,7 +53,18 @@ export const getWorkoutPlanById = asyncHandler(async (req, res) => {
 // access private
 export const updateWorkoutPlan = asyncHandler(async (req, res) => {
     const { planName, days, notes, description, clientId } = req.body;
-    const workoutPlan = await WorkoutPlan.findByIdAndUpdate(req.params.id, { planName, days, notes, description, client: clientId }, { new: true });
+    
+    // Only update client if clientId is provided, otherwise keep existing client
+    const updateData = { planName, days, notes, description };
+    if (clientId) {
+        updateData.client = clientId;
+    }
+    
+    const workoutPlan = await WorkoutPlan.findByIdAndUpdate(
+        req.params.id, 
+        updateData, 
+        { new: true, runValidators: true }
+    );
     if (workoutPlan) {
         await notifyUser({
             userId: workoutPlan.client,
@@ -67,7 +89,10 @@ export const deleteWorkoutPlan = asyncHandler(async (req, res) => {
 export const getClientWorkoutPlan = asyncHandler(async (req, res) => {
     const workoutPlan = await WorkoutPlan.findOne({ client: req.user._id })
         .populate("client", "userName email")
-        .populate("days.exercises.exerciseId", "name bodyPart");
+        .populate({
+            path: "days.exercises.exerciseId",
+            select: "name bodyPart gifUrl instructions target equipment"
+        });
 
     if (!workoutPlan) {
         return res.status(404).json({ success: false, message: "Workout plan not found" });

@@ -77,10 +77,11 @@ app.get("/", (req, res) => {
 });
 
 
-// Global error handler
-app.use(globalErrorHandler);
 // routes
 app.use(router);
+
+// Global error handler (must be AFTER routes)
+app.use(globalErrorHandler);
 
 // ── Socket.IO connection handling ──
 io.on("connection", (socket) => {
@@ -103,6 +104,8 @@ io.on("connection", (socket) => {
 // ── Start server AFTER DB connects ──
 const startServer = async () => {
     await databaseConnction();
+
+
     startCronJobs();
     server.listen(process.env.PORT, () => {
         console.log(`Server is running on port ${process.env.PORT}`);
