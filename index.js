@@ -18,6 +18,10 @@ dotenv.config();
 
 const app = express();
 
+// Trust the first proxy hop (Render's load balancer) so that
+// express-rate-limit can read the real client IP from X-Forwarded-For
+app.set('trust proxy', 1);
+
 // Prevent injection attacks
 app.use(mongoSanitize());
 // General requests rate limiting
