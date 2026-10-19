@@ -31,8 +31,8 @@ export const getAllWorkoutPlans = asyncHandler(async (req, res) => {
         .populate({
             path: "days.exercises.exerciseId",
             select: "name bodyPart"
-        });
-    console.log("DEBUG: ", JSON.stringify(workoutPlans[0]?.days[0]?.exercises, null, 2));
+        })
+        .lean();
     res.status(200).json({ success: true, data: workoutPlans });
 })
 

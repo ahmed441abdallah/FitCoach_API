@@ -49,6 +49,14 @@ const subscriptionSchema = new mongoose.Schema({
 
 }, { timestamps: true });
 
+// Existing: covers client-scoped queries and status filtering for /subscriptions/me
 subscriptionSchema.index({ client: 1, status: 1 });
+
+// Expiry cron: find active subs ending soon → {status:'active', endDate:{$lte:date}}
+subscriptionSchema.index({ status: 1, endDate: 1 });
+
+// Admin dashboard & subscription list sorted newest-first
+subscriptionSchema.index({ createdAt: -1 });
+
 const Subscription = mongoose.model("Subscription", subscriptionSchema);
-export default Subscription;
+export default Subscription;

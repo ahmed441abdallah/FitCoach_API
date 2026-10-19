@@ -5,6 +5,9 @@ import asyncHandler from "../utils/asyncHandler.js";
 // @access public
 export const getPackages = asyncHandler(async (req, res) => {
     const packages = await Package.find().sort({ price: 1 }).lean();
+    // Public data — let CDN / reverse-proxy cache it for 5 min,
+    // serve stale for up to 10 min while revalidating in background.
+    res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
     res.status(200).json({
         success: true,
         data: packages

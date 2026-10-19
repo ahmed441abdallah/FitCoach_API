@@ -63,30 +63,119 @@ export const getStats = asyncHandler(async (req, res) => {
     sixMonthsAgo.setDate(1);
     sixMonthsAgo.setHours(0, 0, 0, 0);
 
-    // Run all DB queries in parallel
-    const [weeklyLogs, monthlyLogs, allLogs, recentLogs] = await Promise.all([
-        WorkoutLog.find({ client: req.user._id, date: { $gte: startOfWeek } }),
-        WorkoutLog.find({ client: req.user._id, date: { $gte: startOfMonth } }),
-        WorkoutLog.find({ client: req.user._id }).sort({ date: -1 }),
-        WorkoutLog.find({ client: req.user._id, date: { $gte: sixMonthsAgo } }),
+    // Single aggregate with $facet replaces 4 separate find() round-trips.
+    // Each facet runs in parallel inside MongoDB — one network hop total.
+    const [result] = await WorkoutLog.aggregate([
+        { $match: { client: req.user._id } },
+        {
+            $facet: {
+                weekly: [
+                    { $match: { date: { $gte: startOfWeek } } },
+                    {
+                        $group: {
+                            _id: null,
+                            sessions: { $sum: 1 },
+                            totalVolumeKg: {
+                                $sum: {
+                                    $reduce: {
+                                        input: "$exercises",
+                                        initialValue: 0,
+                                        in: {
+                                            $add: ["$$value", {
+                                                $reduce: {
+                                                    input: "$$this.sets",
+                                                    initialValue: 0,
+                                                    in: { $add: ["$$value", { $multiply: ["$$this.reps", "$$this.weight"] }] }
+                                                }
+                                            }]
+                                        }
+                                    }
+                                }
+                            },
+                            durationsArr: { $push: "$durationMinutes" }
+                        }
+                    }
+                ],
+                monthly: [
+                    { $match: { date: { $gte: startOfMonth } } },
+                    {
+                        $group: {
+                            _id: null,
+                            sessions: { $sum: 1 },
+                            totalVolumeKg: {
+                                $sum: {
+                                    $reduce: {
+                                        input: "$exercises",
+                                        initialValue: 0,
+                                        in: {
+                                            $add: ["$$value", {
+                                                $reduce: {
+                                                    input: "$$this.sets",
+                                                    initialValue: 0,
+                                                    in: { $add: ["$$value", { $multiply: ["$$this.reps", "$$this.weight"] }] }
+                                                }
+                                            }]
+                                        }
+                                    }
+                                }
+                            },
+                            durationsArr: { $push: "$durationMinutes" }
+                        }
+                    }
+                ],
+                allTime: [
+                    { $sort: { date: -1 } },
+                    {
+                        $group: {
+                            _id: null,
+                            totalSessions: { $sum: 1 },
+                            dates: { $push: { $dateToString: { format: "%Y-%m-%d", date: "$date" } } }
+                        }
+                    }
+                ],
+                breakdown: [
+                    { $match: { date: { $gte: sixMonthsAgo } } },
+                    {
+                        $group: {
+                            _id: { month: { $month: "$date" }, year: { $year: "$date" } },
+                            sessions: { $sum: 1 },
+                            volume: {
+                                $sum: {
+                                    $reduce: {
+                                        input: "$exercises",
+                                        initialValue: 0,
+                                        in: {
+                                            $add: ["$$value", {
+                                                $reduce: {
+                                                    input: "$$this.sets",
+                                                    initialValue: 0,
+                                                    in: { $add: ["$$value", { $multiply: ["$$this.reps", "$$this.weight"] }] }
+                                                }
+                                            }]
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    { $sort: { "_id.year": 1, "_id.month": 1 } }
+                ]
+            }
+        }
     ]);
 
-    // Total volume (reps × weight) across a set of logs
-    const calcVolume = (logs) =>
-        logs.reduce((total, log) =>
-            total + log.exercises.reduce((ex, e) =>
-                ex + e.sets.reduce((s, set) => s + set.reps * set.weight, 0), 0), 0);
-
-    // Average session duration, ignoring logs without a recorded duration
-    const avgDuration = (logs) => {
-        const withDur = logs.filter(l => l.durationMinutes);
-        return withDur.length
-            ? +(withDur.reduce((s, l) => s + l.durationMinutes, 0) / withDur.length).toFixed(1)
-            : 0;
+    // ── Post-process in JS (cheap — already aggregated) ────────────────────
+    const avgDuration = (durArr = []) => {
+        const valid = durArr.filter(Boolean);
+        return valid.length ? +(valid.reduce((s, v) => s + v, 0) / valid.length).toFixed(1) : 0;
     };
 
-    // Current streak — consecutive days ending today that have at least one log
-    const logDates = new Set(allLogs.map(l => new Date(l.date).toISOString().slice(0, 10)));
+    const weeklyData = result.weekly[0] ?? { sessions: 0, totalVolumeKg: 0, durationsArr: [] };
+    const monthlyData = result.monthly[0] ?? { sessions: 0, totalVolumeKg: 0, durationsArr: [] };
+    const allTimeData = result.allTime[0] ?? { totalSessions: 0, dates: [] };
+
+    // Streak — consecutive days ending today that have ≥1 log
+    const logDates = new Set(allTimeData.dates);
     let streak = 0;
     const cursor = new Date(now);
     while (logDates.has(cursor.toISOString().slice(0, 10))) {
@@ -94,34 +183,32 @@ export const getStats = asyncHandler(async (req, res) => {
         cursor.setDate(cursor.getDate() - 1);
     }
 
-    // 6-month monthly breakdown for front-end bar chart
-    const breakdown = {};
-    recentLogs.forEach(log => {
-        const key = new Date(log.date).toLocaleDateString("en-US", { month: "short", year: "2-digit" });
-        if (!breakdown[key]) breakdown[key] = { month: key, sessions: 0, volume: 0 };
-        breakdown[key].sessions += 1;
-        breakdown[key].volume += log.exercises.reduce((t, e) =>
-            t + e.sets.reduce((s, set) => s + set.reps * set.weight, 0), 0);
-    });
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthlyBreakdown = result.breakdown.map(item => ({
+        month: `${monthNames[item._id.month - 1]} ${String(item._id.year).slice(2)}`,
+        sessions: item.sessions,
+        volume: item.volume
+    }));
 
     res.status(200).json({
         success: true,
         data: {
             weekly: {
-                sessions:       weeklyLogs.length,
-                totalVolumeKg:  calcVolume(weeklyLogs),
-                avgDurationMin: avgDuration(weeklyLogs),
+                sessions:       weeklyData.sessions,
+                totalVolumeKg:  weeklyData.totalVolumeKg,
+                avgDurationMin: avgDuration(weeklyData.durationsArr),
             },
             monthly: {
-                sessions:       monthlyLogs.length,
-                totalVolumeKg:  calcVolume(monthlyLogs),
-                avgDurationMin: avgDuration(monthlyLogs),
+                sessions:       monthlyData.sessions,
+                totalVolumeKg:  monthlyData.totalVolumeKg,
+                avgDurationMin: avgDuration(monthlyData.durationsArr),
             },
             allTime: {
-                totalSessions: allLogs.length,
+                totalSessions: allTimeData.totalSessions,
                 currentStreak: streak,
             },
-            monthlyBreakdown: Object.values(breakdown),
+            monthlyBreakdown,
         }
     });
 });
+

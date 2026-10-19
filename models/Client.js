@@ -58,9 +58,15 @@ const clientSchema = new mongoose.Schema({
     default: null
   },
 
-
-
 }, { timestamps: true });
+
+// user is already unique in the schema, but an explicit index ensures
+// the query planner uses it for findOne({user: req.user._id}) —
+// the pattern used by /clients/me and the subscription buyflow.
+clientSchema.index({ user: 1 }, { unique: true });
+
+// Admin lists clients sorted newest-first; compound index avoids a sort stage.
+clientSchema.index({ createdAt: -1 });
 
 const Client = mongoose.model("Client", clientSchema);
 export default Client;
